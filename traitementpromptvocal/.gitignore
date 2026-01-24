@@ -1,0 +1,11 @@
+# Fichiers temporaires Python
+*.pyc
+*.pyo
+*.pyd
+tmp/
+
+# Fichiers de logs et résultats
+*.log
+*.csv
+
+.DS_Store

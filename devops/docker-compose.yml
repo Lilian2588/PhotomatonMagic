@@ -1,0 +1,184 @@
+services:
+  # --- INFRASTRUCTURE ---
+
+  activemq:
+    image: apache/activemq-classic:latest
+    container_name: activemq
+    ports:
+      - "61616:61616" # JMS
+      - "8161:8161"   # Console Web
+    networks:
+      - photomathon-network
+
+  redis:
+    image: redis:alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    networks:
+      - photomathon-network
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq
+    ports:
+      - "5672:5672" # AMQP
+      - "15672:15672" # Console Web
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - photomathon-network
+
+  # --- MICROSERVICES ---
+
+  monolithic:
+    build: ../monolithic
+    container_name: monolithic
+    ports:
+      - "8080:8080"
+    environment:
+      - SPRING_ACTIVEMQ_BROKER_URL=tcp://activemq:61616
+      - MS_CACHE_URL=http://ms-cache:8083/cache/media/upload
+      - MS_AVATAR_URL=http://avatargeneration:8081/avatar/process
+      # Configuration pour la nouvelle notification intégrée
+      - ACTIVEMQ_QUEUE_NAME=Notification-queue
+    volumes:
+      - media-volume:/app/media
+    depends_on:
+      - activemq
+      - redis
+    networks:
+      - photomathon-network
+
+  ms-cache:
+    build: ../ms-cache
+    container_name: ms-cache
+    ports:
+      - "8083:8083"
+    environment:
+      - REDIS_HOST=redis
+      - SPRING_REDIS_PORT=6379
+    depends_on:
+      - redis
+    networks:
+      - photomathon-network
+
+  worker-python:
+    build: ../traitementpromptvocal
+    container_name: worker-python
+    depends_on:
+      rabbitmq:
+        condition: service_healthy # Attend que RabbitMQ soit "vert" avant de lancer Python
+    volumes:
+      - media-volume:/app/media
+      - ../traitementpromptvocal:/app
+    environment:
+      - RABBITMQ_HOST=rabbitmq
+      - CACHE_URL=http://ms-cache:8083/cache/file
+    networks:
+      - photomathon-network
+
+  libretranslate:
+    image: libretranslate/libretranslate:latest
+    container_name: libretranslate
+    user: root
+    ports:
+      - "5500:5000"
+    environment:
+      - LT_LOAD_ONLY=en,fr
+    volumes:
+      - libretranslate-models:/home/libretranslate/.local/share/argos-translate
+    healthcheck:
+      test: ["CMD-SHELL", "./venv/bin/python scripts/healthcheck.py"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - photomathon-network
+
+  ms-prompt-engine:
+    build: ../ms-prompt-engine
+    container_name: ms-prompt-engine
+    ports:
+      - "8084:8084"
+    environment:
+      - LIBRETRANSLATE_URL=http://libretranslate:5000
+    depends_on:
+      libretranslate:
+        condition: service_healthy
+    networks:
+      - photomathon-network
+
+  ms-face-analyze:
+    build: ../ms-face-analyze
+    container_name: ms-face-analyze
+    ports:
+      - "8085:8085"
+    environment:
+      - SPRING_ACTIVEMQ_BROKER_URL=tcp://activemq:61616
+      - MS_CACHE_URL=http://ms-cache:8083/cache/media/{requestId}
+    depends_on:
+      - activemq
+    networks:
+      - photomathon-network
+
+  ms-image:
+    build: ../ms-image
+    container_name: ms-image
+    ports:
+      - "8086:8086"
+    environment:
+      - SPRING_ACTIVEMQ_BROKER_URL=tcp://activemq:61616
+      - MS_CACHE_URL=http://ms-cache:8083/cache/media/{requestId}
+    depends_on:
+      - activemq
+    networks:
+      - photomathon-network
+
+  avatargeneration:
+    build: ../avatargeneration
+    container_name: avatargeneration
+    ports:
+      - "8081:8081"
+    environment:
+      - SPRING_RABBITMQ_HOST=rabbitmq
+      - SPRING_DATA_REDIS_HOST=redis
+      - SPRING_DATA_REDIS_PORT=6379
+      - SPRING_ACTIVEMQ_BROKER_URL=tcp://activemq:61616
+      - MS_IMAGE_URL=http://ms-image:8086/api/transform
+      - MS_PROMPT_URL=http://ms-prompt-engine:8084/prompt/format
+      - MS_FACE_URL=http://ms-face-analyze:8085/face/process
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      activemq:
+        condition: service_started
+      redis:
+        condition: service_started
+    networks:
+      - photomathon-network
+
+  # --- FRONTEND ---
+
+  frontend:
+    build: ../frontend/borne-photo-app
+    container_name: frontend
+    ports:
+      - "3000:80" # On mappe le port 80 du conteneur (Nginx) vers le 3000 de l'hôte
+    depends_on:
+      - monolithic
+    networks:
+      - photomathon-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  media-volume:
+  libretranslate-models:
+
+networks:
+  photomathon-network:
+    driver: bridge
