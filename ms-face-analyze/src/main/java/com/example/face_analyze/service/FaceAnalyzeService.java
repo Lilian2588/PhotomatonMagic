@@ -4,6 +4,7 @@ import com.example.face_analyze.client.CacheClient;
 import com.example.face_analyze.DTO.FaceAnalyzeResultDTO;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
@@ -25,7 +26,9 @@ public class FaceAnalyzeService {
     private final JmsTemplate jmsTemplate;
 
     private static final String FACE_API_URL = "https://cedriccpe-face-analyze.hf.space/analyze_photo";
-    private static final String HF_TOKEN = "REMOVED";
+    @Value("${hf.token}")
+    private static final String HF_TOKEN = System.getenv("HF_TOKEN");
+
 
     public FaceAnalyzeService(CacheClient cacheClient, RestTemplate restTemplate, JmsTemplate jmsTemplate) {
         this.cacheClient = cacheClient;
