@@ -33,3 +33,7 @@ Desktop.ini
 
 ### === Docker ===
 docker-compose.override.yml
+
+### === Variables d'environnements ===
+.env
+*env
